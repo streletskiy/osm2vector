@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local env/config
+.env
+.env.*
+!.env.example
+,env
+
+# Build/render outputs
+*.svg
+*.pdf
+outputs/
+.cache/
+db/
+
+# Local browser profile/cache
+.puppeteer-profile/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

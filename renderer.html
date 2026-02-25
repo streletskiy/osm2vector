@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lunar_assembler offline renderer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      #mount {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+    </style>
+
+    <!--
+      Copy browser-ready lunar_assembler files into:
+      project root
+    -->
+    <link rel="stylesheet" href="./lunar_assembler.dist.css" />
+    <script src="./lunar_assembler.js"></script>
+  </head>
+  <body>
+    <div id="mount"></div>
+    <div id="log" style="display: none"></div>
+
+    <script>
+      function bboxWidthMeters(bbox) {
+        const earthRadius = 6371008.8;
+        const toRad = (deg) => (deg * Math.PI) / 180;
+        const midLat = (bbox.south + bbox.north) / 2;
+        const latRad = toRad(midLat);
+        const dLon = toRad(bbox.east - bbox.west);
+        const a = Math.cos(latRad) * Math.cos(latRad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return earthRadius * c;
+      }
+
+      function mountSvg(svgElement) {
+        const mount = document.getElementById('mount');
+        mount.innerHTML = '';
+        mount.appendChild(svgElement);
+        return svgElement;
+      }
+
+      function applyBackgroundFill(svgElement) {
+        const colors = window.STYLE_DEFAULT_COLORS || {};
+        const fill = colors.backgroundFill || '#ffffff';
+        const viewBox = svgElement.getAttribute('viewBox');
+        let width = 2000;
+        let height = 2000;
+
+        if (viewBox) {
+          const parts = viewBox
+            .trim()
+            .split(/\s+/)
+            .map((x) => Number(x));
+          if (parts.length === 4 && parts.every((x) => Number.isFinite(x))) {
+            width = parts[2];
+            height = parts[3];
+          }
+        }
+
+        const existing = svgElement.querySelector('rect[data-background-fill="yes"]');
+        if (existing) {
+          existing.setAttribute('fill', fill);
+          return;
+        }
+
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', '0');
+        rect.setAttribute('y', '0');
+        rect.setAttribute('width', String(width));
+        rect.setAttribute('height', String(height));
+        rect.setAttribute('fill', fill);
+        rect.setAttribute('data-background-fill', 'yes');
+        svgElement.insertBefore(rect, svgElement.firstChild);
+      }
+
+      function cloneFeatureCollection(featureCollection, features) {
+        return {
+          ...featureCollection,
+          features
+        };
+      }
+
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+          document.head.appendChild(script);
+        });
+      }
+
+      function requestedStyleName() {
+        const params = new URLSearchParams(window.location.search || '');
+        const raw = (params.get('style') || 'default').trim().toLowerCase();
+        if (!raw) return 'default';
+        return raw.replace(/\.js$/i, '');
+      }
+
+      async function initializeStyleSystem() {
+        await loadScript('./styles/default.js');
+
+        let active = requestedStyleName();
+        if (active !== 'default') {
+          try {
+            await loadScript(`./styles/${active}.js`);
+          } catch (error) {
+            console.warn(`${error.message}. Falling back to default style.`);
+            active = 'default';
+          }
+        }
+
+        window.__activeStyleName = active;
+      }
+
+      const styleInitPromise = initializeStyleSystem();
+
+      function expandTramOverlays(featureCollection) {
+        const features = (featureCollection && featureCollection.features) || [];
+        if (features.length === 0) return featureCollection;
+
+        const expanded = [];
+        for (const feature of features) {
+          expanded.push(feature);
+          const props = (feature && feature.properties) || {};
+          const isRoadTram = Boolean(props.highway) && props.railway === 'tram';
+          if (!isRoadTram) continue;
+
+          const overlay = JSON.parse(JSON.stringify(feature));
+          overlay.properties = {
+            ...props,
+            render_as_tram_overlay: 'yes'
+          };
+          expanded.push(overlay);
+        }
+
+        return cloneFeatureCollection(featureCollection, expanded);
+      }
+
+      function splitGeoJsonByLayer(featureCollection, mapStyle) {
+        const features = (featureCollection && featureCollection.features) || [];
+        if (features.length <= 1 || typeof mapStyle.paintOrder !== 'function') {
+          return [featureCollection, cloneFeatureCollection(featureCollection, [])];
+        }
+
+        const orderValues = features
+          .map((feature) => Number(mapStyle.paintOrder(feature)))
+          .filter((x) => Number.isFinite(x))
+          .sort((a, b) => a - b);
+
+        if (orderValues.length === 0) {
+          return [featureCollection, cloneFeatureCollection(featureCollection, [])];
+        }
+
+        const midValue = orderValues[Math.floor(orderValues.length / 2)];
+        const firstPassFeatures = [];
+        const secondPassFeatures = [];
+        for (const feature of features) {
+          const order = Number(mapStyle.paintOrder(feature));
+          if (Number.isFinite(order) && order <= midValue) {
+            firstPassFeatures.push(feature);
+          } else {
+            secondPassFeatures.push(feature);
+          }
+        }
+
+        // Fallback: if split failed to divide data, keep single-pass behavior.
+        if (firstPassFeatures.length === 0 || secondPassFeatures.length === 0) {
+          return [featureCollection, cloneFeatureCollection(featureCollection, [])];
+        }
+
+        return [
+          cloneFeatureCollection(featureCollection, firstPassFeatures),
+          cloneFeatureCollection(featureCollection, secondPassFeatures)
+        ];
+      }
+
+      function renderPass(readableBounds, dataGeoJson, canvasWidth, canvasHeight, mapStyle) {
+        window.render(readableBounds, dataGeoJson, canvasWidth, canvasHeight, mapStyle, 'mount');
+        const svg = document.querySelector('#mount svg');
+        if (!svg) {
+          throw new Error('Renderer returned no SVG for a pass.');
+        }
+        return svg.cloneNode(true);
+      }
+
+      function mergeSvgs(bottomSvg, topSvg) {
+        const result = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const source = bottomSvg || topSvg;
+        const attrs = source.getAttributeNames();
+        for (const name of attrs) {
+          result.setAttribute(name, source.getAttribute(name));
+        }
+
+        if (bottomSvg) {
+          for (const child of bottomSvg.childNodes) {
+            result.appendChild(child.cloneNode(true));
+          }
+        }
+
+        if (topSvg) {
+          for (const child of topSvg.childNodes) {
+            result.appendChild(child.cloneNode(true));
+          }
+        }
+
+        return result;
+      }
+
+      window.renderWithLunarAssembler = async function renderWithLunarAssembler(
+        overpassJson,
+        bbox,
+        renderOptions
+      ) {
+        await styleInitPromise;
+
+        if (typeof window.toGeoJSON !== 'function' || typeof window.render !== 'function') {
+          throw new Error('Required lunar_assembler globals (toGeoJSON/render) are missing.');
+        }
+
+        if (typeof window.createMapStyle !== 'function') {
+          throw new Error('Style factory is missing.');
+        }
+
+        // render() logs through this global, so provide a real target element id.
+        window.logOutputIdConfig = 'log';
+
+        const canvasWidth = Number((renderOptions && renderOptions.canvasWidth) || 2000);
+        const canvasHeight = Number((renderOptions && renderOptions.canvasHeight) || canvasWidth);
+        const widthMeters = bboxWidthMeters(bbox);
+        const metersPerPixel = widthMeters / canvasWidth;
+
+        const mapStyle = window.createMapStyle(window.__activeStyleName || 'default', {
+          metersPerPixel
+        });
+        const geoJSON = expandTramOverlays(window.toGeoJSON(overpassJson));
+        const [firstPassGeoJSON, secondPassGeoJSON] = splitGeoJsonByLayer(geoJSON, mapStyle);
+        const readableBounds = {
+          west: bbox.west,
+          south: bbox.south,
+          east: bbox.east,
+          north: bbox.north
+        };
+
+        const firstSvg = renderPass(
+          readableBounds,
+          firstPassGeoJSON,
+          canvasWidth,
+          canvasHeight,
+          mapStyle
+        );
+        let mergedSvg = firstSvg;
+
+        const secondFeatures = secondPassGeoJSON.features || [];
+        if (secondFeatures.length > 0) {
+          const secondSvg = renderPass(
+            readableBounds,
+            secondPassGeoJSON,
+            canvasWidth,
+            canvasHeight,
+            mapStyle
+          );
+          mergedSvg = mergeSvgs(firstSvg, secondSvg);
+        }
+
+        applyBackgroundFill(mergedSvg);
+        return mountSvg(mergedSvg).outerHTML;
+      };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "osm2vector",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "render": "node index.js",
+    "render:test": "node index.js test",
+    "test": "echo \"No unit tests configured\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "AGPL-3.0-only",
+  "description": "Export large OpenStreetMap areas into vector formats (SVG/PDF) with configurable rendering styles.",
+  "dependencies": {
+    "axios": "^1.13.5",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1",
+    "puppeteer": "^24.37.5"
+  }
+}
