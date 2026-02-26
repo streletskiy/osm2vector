@@ -516,7 +516,7 @@ function splitOverpassDataForThreePasses(overpassData) {
       tags.natural === 'water' ||
       tags.leisure === 'park';
     const isBuildingPass = Boolean(tags.building);
-    const isLinePass = Boolean(tags.highway || tags.railway);
+    const isLinePass = Boolean((tags.highway && tags.highway !== 'construction') || tags.railway);
 
     // Priority to avoid duplicate rendering of the same feature in multiple passes.
     if (isAreaPass) {

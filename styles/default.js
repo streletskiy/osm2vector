@@ -140,7 +140,7 @@
         strokeDasharray: null
       };
     }
-    if (props.highway) {
+    if (props.highway && props.highway !== 'construction') {
       return {
         fill: 'none',
         stroke: colors.roadStroke,
@@ -177,7 +177,7 @@
         if (isRailway(props)) return 370;
         if (isStairs(props)) return 360;
         if (isSidewalk(props)) return 350;
-        if (props.highway) return 300;
+        if (props.highway && props.highway !== 'construction') return 300;
         if (props.building) return 200;
         if (props.landuse === 'grass') return 140;
         if (isSidewalkOrPlazaArea(feature)) return 130;
